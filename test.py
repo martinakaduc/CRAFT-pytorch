@@ -220,6 +220,7 @@ if __name__ == '__main__':
         for i, box in enumerate(bboxes):
             poly = np.array(box).astype(np.int32).reshape((-1))
             poly = poly.reshape(-1, 2)
+            bboxes[i] = poly
 
             block_text = four_point_transform(image, poly)
             text = pytesseract.image_to_string(block_text, config=oem_psm_config)
@@ -230,8 +231,41 @@ if __name__ == '__main__':
 
             full_text.append(text)
 
+        final_result = []
+        current_line_y = [0, 0]
+        current_line_x_index = []
+
+        for i, box in enumerate(bboxes):
+            # print(full_text[i])
+            top = min(box[:, 1])
+            if top < (current_line_y[0] + current_line_y[1])/2:
+                left = min(box[:, 0])
+                list_line_left = [min(bboxes[x][:, 0]) for x in current_line_x_index]
+                ins_index = np.where(np.array(list_line_left) > left)[0]
+
+                if ins_index.shape[0] == 0:
+                    current_line_x_index.append(i)
+                    final_result[-1] += ' ' + full_text[i]
+                else:
+                    # print(list_line_left[ins_index[0]])
+                    # print(left)
+                    # print(current_line_x_index)
+                    # print(full_text[current_line_x_index[ins_index[0]]])
+                    start_str = final_result[-1].find(full_text[current_line_x_index[ins_index[0]]])
+                    # print(final_result[-1])
+                    # print(start_str)
+                    final_result[-1] = final_result[-1][:start_str] + full_text[i] + ' ' + final_result[-1][start_str:]
+                    current_line_x_index.insert(ins_index[0], i)
+
+                current_line_y = [min([current_line_y[0], min(box[:, 1])]), max([current_line_y[1], max(box[:, 1])])]
+
+            else:
+                final_result.append(full_text[i])
+                current_line_y = [min(box[:, 1]), max(box[:, 1])]
+                current_line_x_index = [i]
+
         with open(text_file, 'w') as f:
-            f.write('\n'.join(full_text))
+            f.write('\n'.join(final_result))
 
     print("elapsed time : {}s".format(time.time() - t))
 
