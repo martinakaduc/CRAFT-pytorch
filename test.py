@@ -201,7 +201,9 @@ if __name__ == '__main__':
 
     # load data
     for k, image_path in enumerate(image_list):
-        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
+        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\n')
+
+        time_start = time.time()
         image = imgproc.loadImage(image_path)
 
         bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
@@ -264,9 +266,11 @@ if __name__ == '__main__':
                 current_line_y = [min(box[:, 1]), max(box[:, 1])]
                 current_line_x_index = [i]
 
-        with open(text_file, 'w') as f:
+        with open(text_file, 'w', encoding='utf8') as f:
             f.write('\n'.join(final_result))
 
-    print("elapsed time : {}s".format(time.time() - t))
+        print("Image {:s}: {}s".format(image_path, time.time() - t))
+
+    print("Elapsed time : {}s".format(time.time() - t))
 
     # python test.py --test_folder ./input/ --cuda False --refine
