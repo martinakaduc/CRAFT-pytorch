@@ -25,6 +25,7 @@ import file_utils
 import json
 import zipfile
 import pytesseract
+from pytesseract import Output
 
 from craft import CRAFT
 
@@ -272,19 +273,88 @@ if __name__ == '__main__':
 
     # load data
     for k, image_path in enumerate(image_list):
-        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\n')
-
-        time_start = time.time()
+        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
         image = imgproc.loadImage(image_path)
         bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net, overlap=args.overlap)\
 
         # save score text
         filename, file_ext = os.path.splitext(os.path.basename(image_path))
         text_file = result_folder + "/res_" + filename + '_text.txt'
-        mask_file = result_folder + "/res_" + filename + '_mask.jpg'
-        cv2.imwrite(mask_file, score_text)
+        
+        #mask_file = result_folder + "/res_" + filename + '_mask.jpg'
+        #cv2.imwrite(mask_file, score_text)
 
-        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
+        full_text = []
+        oem_psm_config = r'--oem 3 --psm 6'
+        text_coors_array = []
+
+        for i, box in enumerate(bboxes):
+            poly = np.array(box).astype(np.int32).reshape((-1))
+            poly = poly.reshape(-1, 2)
+            bboxes[i] = poly
+
+            block_text = four_point_transform(image, poly)
+            text = pytesseract.image_to_string(block_text, config=oem_psm_config)
+            data = pytesseract.image_to_data(block_text, output_type=Output.DICT, config=oem_psm_config)
+    
+            text_coors = []
+            for j in range(len(data['level'])):
+                if not data['text'][j]:
+                    continue
+                lt = [data['left'][j] + poly[0][0] - 5, data['top'][j] + poly[0][1]]
+                poly_word = [lt, [lt[0] + data['width'][j], lt[1]], [lt[0] + data['width'][j], lt[1] + data['height'][j]], [lt[0], lt[1] + data['height'][j]]]
+                text_coors.append([data['text'][j], poly_word])
+
+
+            # cv2.imshow("image", block_text)
+            # cv2.waitKey()
+            # print(text)
+
+            text_coors_array.append(text_coors)
+            full_text.append(text)
+
+        final_result = []
+        current_line_y = [0, 0]
+        current_line_x_index = []
+
+        for i, box in enumerate(bboxes):
+            # print(full_text[i])
+            top = min(box[:, 1])
+            if top < (current_line_y[0] + current_line_y[1])/2:
+                left = min(box[:, 0])
+                list_line_left = [min(bboxes[x][:, 0]) for x in current_line_x_index]
+                ins_index = np.where(np.array(list_line_left) > left)[0]
+
+                if ins_index.shape[0] == 0:
+                    current_line_x_index.append(i)
+                    final_result[-1] += ' ' + full_text[i]
+                else:
+                    # print(list_line_left[ins_index[0]])
+                    # print(left)
+                    # print(current_line_x_index)
+                    # print(full_text[current_line_x_index[ins_index[0]]])
+                    start_str = final_result[-1].find(full_text[current_line_x_index[ins_index[0]]])
+                    # print(final_result[-1])
+                    # print(start_str)
+                    final_result[-1] = final_result[-1][:start_str] + full_text[i] + ' ' + final_result[-1][start_str:]
+                    current_line_x_index.insert(ins_index[0], i)
+
+                current_line_y = [min([current_line_y[0], min(box[:, 1])]), max([current_line_y[1], max(box[:, 1])])]
+
+            else:
+                final_result.append(full_text[i])
+                current_line_y = [min(box[:, 1]), max(box[:, 1])]
+                current_line_x_index = [i]
+        
+        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder, verticals=None, texts=text_coors_array)
+
+        with open(text_file, 'w') as f:
+            f.write('\n'.join(final_result))
+
+        # mask_file = result_folder + "/res_" + filename + '_mask.jpg'
+        # cv2.imwrite(mask_file, score_text)
+
+        # file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
 
         # full_text = []
         # oem_psm_config = r'--oem 3 --psm 6'
@@ -339,8 +409,6 @@ if __name__ == '__main__':
         # with open(text_file, 'w', encoding='utf8') as f:
         #     f.write('\n'.join(final_result))
 
-        print("Image {:s}: {}s".format(image_path, time.time() - t))
-
-    print("Elapsed time : {}s".format(time.time() - t))
+    print("elapsed time : {}s".format(time.time() - t))
 
     # python test.py --test_folder ./input/ --cuda False --refine
