@@ -2,13 +2,13 @@
 Official Pytorch implementation of CRAFT text detector | [Paper](https://arxiv.org/abs/1904.01941) | [Pretrained Model](https://drive.google.com/open?id=1Jk4eGD7crsqCCg9C9VjCLkMN3ze8kutZ) | [Supplementary](https://youtu.be/HI8MzpY8KMI)
 
 **[Youngmin Baek](mailto:youngmin.baek@navercorp.com), Bado Lee, Dongyoon Han, Sangdoo Yun, Hwalsuk Lee.**
- 
+
 Clova AI Research, NAVER Corp.
 
 ### Sample Results
 
 ### Overview
-PyTorch implementation for CRAFT text detector that effectively detect text area by exploring each character region and affinity between characters. The bounding box of texts are obtained by simply finding minimum bounding rectangles on binary map after thresholding character region and affinity scores. 
+PyTorch implementation for CRAFT text detector that effectively detect text area by exploring each character region and affinity between characters. The bounding box of texts are obtained by simply finding minimum bounding rectangles on binary map after thresholding character region and affinity scores.
 
 <img width="1000" alt="teaser" src="./figures/craft_example.gif">
 
@@ -35,7 +35,7 @@ The code for training is not included in this repository, and we cannot release 
 
 ### Test instruction using pretrained model
 - Download the trained models
- 
+
  *Model name* | *Used datasets* | *Languages* | *Purpose* | *Model Link* |
  | :--- | :--- | :--- | :--- | :--- |
 General | SynthText, IC13, IC17 | Eng + MLT | For general purpose | [Click](https://drive.google.com/open?id=1Jk4eGD7crsqCCg9C9VjCLkMN3ze8kutZ)
@@ -66,6 +66,65 @@ The result image and socre maps will be saved to `./result` by default.
 * `--refine`: use link refiner for sentense-level dataset
 * `--refiner_model`: pretrained refiner model
 
+### Parameter tuning guideline
+#### CRAFT
+Firstly, you need understand how CRAFT works. We feed an image input to CRAFT, then CRAFT will give us two things: character heatmap and link heatmap. Then with *Refine Model*, it takes CRAFT output as input and give us a better link heatmap. Next, we have the character heatmap from CRAFT and link heatmap from Refine Model then we will go to the post-process.
+
+There are three parameters controlling post-process: low_text, link_threshold and text_threshold.
+The post-process (PP) firstly do thresholding on character heatmap using low_text parameter and link heatmap using link_threshold.
+
+<img width="500" alt="character_map" src="./figures/character_map.png">
+<img width="500" alt="character_map_high" src="./figures/character_map_high.png">
+*Character map low 0.15 and high 0.85*
+
+<img width="500" alt="link_map" src="./figures/link_map.png">
+<img width="500" alt="link_map_high" src="./figures/link_map_high.png">
+*Link map low 0.6 and high 0.9*
+
+After that, binary character map and binary link map will be combined into one image.
+
+<img width="500" alt="text_comb" src="./figures/text_comb.png">
+<img width="500" alt="text_comb_high" src="./figures/text_comb_high.png">
+*Combined map low and high*
+
+Next, the PP uses OpenCV connectedComponentsWithStats() method to find connected blocks. For each block, the PP will check its area size, then check max value of that block pixel (if max_value < text_threshold, the PP will consider that is not a real text block). Then the PP calculates 4 point of the text box.
+
+So that, the meaning of 3 parameters can be explained as following:
+* low_text: for separating character and background (the higher the more likely character required)
+* link_threshold: for linking characters (the higher the more words/characters separated)
+* text_threshold: the minimum required pixel value (in character heatmap) for considering real text box
+
+Currently, toward the bill documents, the nearly best parameters is 0.15, 0.6 and 0.5 corresponding to low_text, link_threshold and text_threshold.
+
+#### Tesseract
+OEM modes:
+* 0    Legacy engine only.
+* 1    Neural nets LSTM engine only.
+* 2    Legacy + LSTM engines.
+* 3    Default, based on what is available.
+
+Legacy mode does not support Indic and Arabic script language. If we only use mode 1, we can retrain/finetune the tesseract data file.
+For the bill document, oem mode 2 scores the best result.
+
+PSM modes:
+* 0    Orientation and script detection (OSD) only.
+* 1    Automatic page segmentation with OSD.
+* 2    Automatic page segmentation, but no OSD, or OCR.
+* 3    Fully automatic page segmentation, but no OSD. (Default)
+* 4    Assume a single column of text of variable sizes.
+* 5    Assume a single uniform block of vertically aligned text.
+* 6    Assume a single uniform block of text.
+* 7    Treat the image as a single text line.
+* 8    Treat the image as a single word.
+* 9    Treat the image as a single word in a circle.
+* 10   Treat the image as a single character.
+* 11   Sparse text. Find as much text as possible in no particular order.
+* 12   Sparse text with OSD.
+* 13   Raw line. Treat the image as a single text line, bypassing hacks that are Tesseract-specific.
+
+With using CRAFT, we already have text block with correct orientation. So that, we only need psm mode 6.
+
+Before cropping image for Tesseract, we need to enlarge the box a little to make sure that the box covers all strokes of text.
 
 ## Links
 - WebDemo : https://demo.ocr.clova.ai/
