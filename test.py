@@ -57,6 +57,7 @@ parser.add_argument('--show_time', default=False, action='store_true', help='sho
 parser.add_argument('--test_folder', default='/data/', type=str, help='folder path to input images')
 parser.add_argument('--refine', default=True, action='store_true', help='enable link refiner')
 parser.add_argument('--refiner_model', default='weights/craft_refiner_CTW1500.pth', type=str, help='pretrained refiner model')
+parser.add_argument('--overlap', default=0.2, type=float, help='Overlap percentage 0.0-1.0')
 
 args = parser.parse_args()
 
@@ -68,17 +69,86 @@ result_folder = './result/'
 if not os.path.isdir(result_folder):
     os.mkdir(result_folder)
 
-def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, refine_net=None):
+def splitOverlap(image, overlap_percentage):
+    h, w, _ = image.shape
+
+    h_sp = h / 2
+    w_sp = w / 2
+    h_sp = int(h_sp + h_sp * overlap_percentage)
+    w_sp = int(w_sp + w_sp * overlap_percentage)
+
+
+    split_cord = [[0, 0, h_sp, w_sp],
+                  [0, w - w_sp, h_sp, w],
+                  [h - h_sp, 0, h, w_sp],
+                  [h - h_sp, w - w_sp, h, w]]
+
+    res = np.array([
+                        image[split_cord[i][0]:split_cord[i][2], split_cord[i][1]:split_cord[i][3], :]
+                        for i in range(4)
+                   ])
+
+    return res, split_cord
+
+def joinOverlap(images, split_cord):
+    if not split_cord: return images
+
+    w = split_cord[-1][-1]
+    h = split_cord[-1][-2]
+
+    w_shape = split_cord[0][-1]
+    h_shape = split_cord[0][-2]
+
+    image_construct = np.zeros((h, w))
+    for i, part in enumerate(split_cord):
+        image_construct[part[0]:part[2], part[1]:part[3]] = np.maximum(image_construct[part[0]:part[2], part[1]:part[3]],
+                                                                        cv2.resize(images[i, :, :], (w_shape, h_shape)))
+
+    return cv2.resize(image_construct, (w//2, h//2))
+
+def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, refine_net=None, overlap=0.0):
     t0 = time.time()
 
     # resize
-    img_resized, target_ratio, size_heatmap = imgproc.resize_aspect_ratio(image, args.canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=args.mag_ratio)
-    ratio_h = ratio_w = 1 / target_ratio
+    # img_resized, target_ratio, size_heatmap = imgproc.resize_aspect_ratio(image, args.canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=args.mag_ratio)
+    # ratio_h = ratio_w = 1 / target_ratio
+    img_resized = image
+    ratio_h = ratio_w = 1
 
     # preprocessing
     x = imgproc.normalizeMeanVariance(img_resized)
-    x = torch.from_numpy(x).permute(2, 0, 1)    # [h, w, c] to [c, h, w]
-    x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
+
+
+    # x = torch.from_numpy(x).permute(2, 0, 1)    # [h, w, c] to [c, h, w]
+    # x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
+    #
+    # if cuda:
+    #     x = x.cuda()
+    #
+    # # forward pass
+    # with torch.no_grad():
+    #     y, feature = net(x)
+    #
+    # # make score and link map
+    # score_text = y[0,:,:,0].cpu().data.numpy()
+    #
+    # if refine_net is None:
+    #     score_link = y[0,:,:,1].cpu().data.numpy()
+    # else:
+    #     # refine link
+    #     with torch.no_grad():
+    #         y_refiner = refine_net(y, feature)
+    #
+    #     score_link = y_refiner[0,:,:,0].cpu().data.numpy()
+
+    split_coord = []
+    if overlap > 0.0 and overlap < 1.0:
+        x, split_coord = splitOverlap(x, overlap)
+
+    x = torch.from_numpy(x).permute(0, 3, 1, 2)    # [h, w, c] to [c, h, w]
+    # x = torch.from_numpy(x).permute(2, 0, 1)    # [h, w, c] to [c, h, w]
+    x = Variable(x)                # [c, h, w] to [b, c, h, w]
+
     if cuda:
         x = x.cuda()
 
@@ -87,15 +157,16 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
         y, feature = net(x)
 
     # make score and link map
-    score_text = y[0,:,:,0].cpu().data.numpy()
-    if refine_net is None:
-        score_link = y[0,:,:,1].cpu().data.numpy()
+    score_text = joinOverlap(y[:,:,:,0].cpu().data.numpy(), split_coord)
 
-    # refine link
+    if refine_net is None:
+        score_link = joinOverlap(y[:,:,:,1].cpu().data.numpy(), split_coord)
     else:
+        # refine link
         with torch.no_grad():
             y_refiner = refine_net(y, feature)
-        score_link = y_refiner[0,:,:,0].cpu().data.numpy()
+
+        score_link = joinOverlap(y_refiner[:,:,:,0].cpu().data.numpy(), split_coord)
 
     t0 = time.time() - t0
     t1 = time.time()
@@ -204,12 +275,12 @@ if __name__ == '__main__':
     for k, image_path in enumerate(image_list):
         print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
         image = imgproc.loadImage(image_path)
-
-        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
+        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net, overlap=args.overlap)\
 
         # save score text
         filename, file_ext = os.path.splitext(os.path.basename(image_path))
         text_file = result_folder + "/res_" + filename + '_text.txt'
+        
         #mask_file = result_folder + "/res_" + filename + '_mask.jpg'
         #cv2.imwrite(mask_file, score_text)
 
@@ -279,6 +350,64 @@ if __name__ == '__main__':
 
         with open(text_file, 'w') as f:
             f.write('\n'.join(final_result))
+
+        # mask_file = result_folder + "/res_" + filename + '_mask.jpg'
+        # cv2.imwrite(mask_file, score_text)
+
+        # file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
+
+        # full_text = []
+        # oem_psm_config = r'--oem 3 --psm 6'
+        #
+        # for i, box in enumerate(bboxes):
+        #     poly = np.array(box).astype(np.int32).reshape((-1))
+        #     poly = poly.reshape(-1, 2)
+        #     bboxes[i] = poly
+        #
+        #     block_text = four_point_transform(image, poly)
+        #     text = pytesseract.image_to_string(block_text, config=oem_psm_config)
+        #
+        #     # cv2.imshow("image", block_text)
+        #     # cv2.waitKey()
+        #     # print(text)
+        #
+        #     full_text.append(text)
+        #
+        # final_result = []
+        # current_line_y = [0, 0]
+        # current_line_x_index = []
+        #
+        # for i, box in enumerate(bboxes):
+        #     # print(full_text[i])
+        #     top = min(box[:, 1])
+        #     if top < (current_line_y[0] + current_line_y[1])/2:
+        #         left = min(box[:, 0])
+        #         list_line_left = [min(bboxes[x][:, 0]) for x in current_line_x_index]
+        #         ins_index = np.where(np.array(list_line_left) > left)[0]
+        #
+        #         if ins_index.shape[0] == 0:
+        #             current_line_x_index.append(i)
+        #             final_result[-1] += ' ' + full_text[i]
+        #         else:
+        #             # print(list_line_left[ins_index[0]])
+        #             # print(left)
+        #             # print(current_line_x_index)
+        #             # print(full_text[current_line_x_index[ins_index[0]]])
+        #             start_str = final_result[-1].find(full_text[current_line_x_index[ins_index[0]]])
+        #             # print(final_result[-1])
+        #             # print(start_str)
+        #             final_result[-1] = final_result[-1][:start_str] + full_text[i] + ' ' + final_result[-1][start_str:]
+        #             current_line_x_index.insert(ins_index[0], i)
+        #
+        #         current_line_y = [min([current_line_y[0], min(box[:, 1])]), max([current_line_y[1], max(box[:, 1])])]
+        #
+        #     else:
+        #         final_result.append(full_text[i])
+        #         current_line_y = [min(box[:, 1]), max(box[:, 1])]
+        #         current_line_x_index = [i]
+        #
+        # with open(text_file, 'w', encoding='utf8') as f:
+        #     f.write('\n'.join(final_result))
 
     print("elapsed time : {}s".format(time.time() - t))
 
