@@ -25,6 +25,7 @@ import file_utils
 import json
 import zipfile
 import pytesseract
+from pytesseract import Output
 
 from craft import CRAFT
 
