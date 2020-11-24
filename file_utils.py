@@ -45,32 +45,47 @@ def saveResult(img_file, img, boxes, dirname='./result/', verticals=None, texts=
         # make result file list
         filename, file_ext = os.path.splitext(os.path.basename(img_file))
 
-        # result directory
         res_file = dirname + "res_" + filename + '.txt'
         res_img_file = dirname + "res_" + filename + '.jpg'
 
         if not os.path.isdir(dirname):
             os.mkdir(dirname)
 
-        with open(res_file, 'w') as f:
-            for i, box in enumerate(boxes):
-                poly = np.array(box).astype(np.int32).reshape((-1))
+        f = open(res_file, 'w')
+        for i, box in enumerate(boxes):
+            #poly = np.array(box).astype(np.int32).reshape((-1))
+            #strResult = ','.join([str(p) for p in poly]) + '\r\n'
+
+            #poly = poly.reshape(-1, 2)
+            #cv2.polylines(img, [poly.reshape((-1, 1, 2))], True, color=(0, 0, 255), thickness=1)
+            #ptColor = (0, 255, 255)
+
+            #texts[i] = texts[i].replace(chr(12),'')
+            #texts[i] = texts[i].replace(chr(10),'')
+
+            #f.write(texts[i] + '---' + strResult)
+
+            #if texts is not None:
+            #    font = cv2.FONT_HERSHEY_DUPLEX
+            #    font_scale = 0.5
+            #    cv2.putText(img, "{}".format(texts[i]), (poly[0][0]+2, poly[0][1]-5), font, font_scale, (0,115,186), thickness=2)
+
+            for j in range(len(texts[i])):
+                poly = np.array(texts[i][j][1], np.int32) 
+                cv2.polylines(img, [poly.reshape((-1, 1, 2))], True, color=(0, 0, 255), thickness=1)
+                
+                font = cv2.FONT_HERSHEY_DUPLEX
+                font_scale = 0.45
+                text = texts[i][j][0]
+                for char in texts[i][j][0]:
+                  if ord(char) < 32 or ord(char) > 126:
+                    text = texts[i][j][0].replace(char,'')
+                cv2.putText(img, "{}".format(text), (poly[0][0], poly[0][1]-5), font, font_scale, (0,115,186), thickness=2)
+                
                 strResult = ','.join([str(p) for p in poly]) + '\r\n'
-                f.write(strResult)
+                f.write(text + '---' + strResult)
 
-                poly = poly.reshape(-1, 2)
-                cv2.polylines(img, [poly.reshape((-1, 1, 2))], True, color=(0, 0, 255), thickness=2)
-                ptColor = (0, 255, 255)
-                if verticals is not None:
-                    if verticals[i]:
-                        ptColor = (255, 0, 0)
-
-                if texts is not None:
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.5
-                    cv2.putText(img, "{}".format(texts[i]), (poly[0][0]+1, poly[0][1]+1), font, font_scale, (0, 0, 0), thickness=1)
-                    cv2.putText(img, "{}".format(texts[i]), tuple(poly[0]), font, font_scale, (0, 255, 255), thickness=1)
-
+        f.close()
         # Save result image
         cv2.imwrite(res_img_file, img)
 
